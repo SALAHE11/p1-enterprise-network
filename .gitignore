@@ -1,0 +1,34 @@
+# Containerlab runtime folders (recreated at every deploy)
+clab-*/
+*.bak
+
+# Vendor images and VM disks (licensed and huge: never in Git)
+*.qcow2
+*.img
+*.iso
+*.tar
+*.tar.xz
+*.tar.gz
+*.zip
+*.out
+*.kvm
+
+# License files and secrets (private keys, passwords)
+*.lic
+*.license
+.env
+*.key
+*.pem
+secrets/
+
+# Python and Ansible leftovers
+__pycache__/
+*.pyc
+.venv/
+*.retry
+
+# Editor and OS clutter
+.vscode/
+.idea/
+*.swp
+.DS_Store
