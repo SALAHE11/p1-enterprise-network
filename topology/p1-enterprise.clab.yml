@@ -1,0 +1,42 @@
+# Project 1 lab: Phase 1, HQ switching
+name: p1-enterprise
+
+topology:
+  kinds:
+    arista_ceos:
+      image: ceos:4.32.5.1M          # every cEOS node uses this image
+
+  nodes:
+    core-sw:
+      kind: arista_ceos
+    acc-sw1:
+      kind: arista_ceos
+    acc-sw2:
+      kind: arista_ceos
+    user-pc2:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      network-mode: none
+      exec:
+        - ip address add 10.18.0.3/22 dev eth1
+    guest-kali:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      network-mode: none
+      exec:
+        - ip address add 10.19.64.34/27 dev eth1
+    user-pc1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      network-mode: none             # no management interface (decision 17)
+      exec:
+        - ip address add 10.18.0.2/22 dev eth1   # temporary, until DHCP (topic 4)
+    
+
+  links:
+    - endpoints: ["core-sw:eth1", "acc-sw1:eth1"]    # link 1: trunk
+    - endpoints: ["acc-sw1:eth3", "user-pc1:eth1"]   # link 4: access, VLAN 100
+    - endpoints: ["acc-sw1:eth4", "guest-kali:eth1"]
+    - endpoints: ["core-sw:eth2", "acc-sw2:eth1"]
+    - endpoints: ["acc-sw1:eth2", "acc-sw2:eth2"]
+    - endpoints: ["acc-sw2:eth3", "user-pc2:eth1"]
