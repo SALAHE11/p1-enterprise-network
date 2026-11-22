@@ -1,4 +1,3 @@
-cd /data/projects/p1-enterprise-network && cat > docs/lld.md << 'EOF'
 # Low-level design (LLD)
 
 Project 1, HQ switching. Updated topic by topic; this version covers Phase 1, topic 1 (VLANs and trunks).
@@ -50,4 +49,3 @@ Exported with `docker exec clab-p1-enterprise-<switch> Cli -p 15 -c "show runnin
 
 ## 7. Open items
 - The native VLAN is still 1 (default) on all trunks. Hardening option: use an unused VLAN as the native VLAN on every trunk (to decide later).
-EOF
