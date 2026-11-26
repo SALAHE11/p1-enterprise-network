@@ -19,18 +19,21 @@ topology:
       network-mode: none
       exec:
         - ip address add 10.18.0.3/22 dev eth1
+        - ip route add default via 10.18.0.1  # gateway: core-sw Vlan100 
     guest-kali:
       kind: linux
       image: ghcr.io/hellt/network-multitool
       network-mode: none
       exec:
         - ip address add 10.19.64.34/27 dev eth1
+        - ip route add default via 10.19.64.33  # gateway: core-sw Vlan10
     user-pc1:
       kind: linux
       image: ghcr.io/hellt/network-multitool
       network-mode: none             # no management interface (decision 17)
       exec:
         - ip address add 10.18.0.2/22 dev eth1   # temporary, until DHCP (topic 4)
+        - ip route add default via 10.18.0.1   # gateway: core-sw Vlan100
     
 
   links:
