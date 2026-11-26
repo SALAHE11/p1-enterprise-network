@@ -6,7 +6,7 @@ Goal: network segmentation with two firewalls, site-to-site and remote-access VP
 **Built with:** containerlab, Arista cEOS, OPNsense, FortiGate VM, KVM.
 
 ## Status
-Phase 0 (lab setup) in progress. Target for v1.0: February 2027.
+Phase 1 (HQ core) in progress: VLANs, STP and inter-VLAN routing done. Target for v1.0: February 2027.
 
 ## Repository layout
 - `topology/`: lab topology, bridge script, VM definitions

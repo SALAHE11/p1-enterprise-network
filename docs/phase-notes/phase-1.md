@@ -69,3 +69,77 @@
 - Port roles reveal the root: assume each switch is the root, then check against what you see.
 - A root port always faces a designated port. On each link, the designated end is the switch closer to the root (lower own root cost), then the lower bridge ID.
 - Choose the root on purpose (the core), and protect host ports with BPDU Guard.
+
+## Topic 3: inter-VLAN routing (25–26 Nov)
+
+### What was built
+- core-sw routes between the VLANs: `ip routing`, `interface Vlan100` 10.18.0.1/22 and `interface Vlan10` 10.19.64.33/27. These are the hosts' default gateways.
+- Each host's default route is in its clab `exec` lines (commit `f8e69d6`), so it comes back after a redeploy.
+- Management VRF on core-sw: Management0 and its default route moved to VRF MGMT; SSH, eAPI, gNMI and NETCONF run in VRF MGMT only. Details in `docs/lld.md` sections 5 and 6.
+
+### Tests and predictions
+| Test | Expected | Result |
+|---|---|---|
+| user-pc1 → guest-kali | Works, `ttl=63`: core-sw lowers the TTL once when it forwards | As expected: `ttl=63` |
+| guest-kali → 172.20.20.4 (core-sw's Management0), before the fix | Must fail: the guest VLAN must never reach a management address | Replied with `ttl=64`: core-sw answered for itself. This is the management leak (security analysis below) |
+| Capture on core-sw eth1, filter `vlan and icmp`, during `ping -c 3` user-pc1 → guest-kali | 4 frames per ping (table below) | 12 frames: `captures/p1-intervlan-routed-ping.pcap`. Prediction 6/8: missed the destination MAC going down (guest-kali, not user-pc1) and the TTL going down (63) |
+| `ip route` on the three hosts after `destroy` + `deploy` | `default via` the gateway on each host | As expected |
+
+What the capture shows for each ping (core-sw eth1 is the trunk to acc-sw1):
+
+| Frame | Direction | VLAN | Source MAC → destination MAC | TTL |
+|---|---|---|---|---|
+| Request | acc-sw1 → core-sw | 100 | user-pc1 → core-sw | 64 |
+| Same request, routed | core-sw → acc-sw1 | 10 | core-sw → guest-kali | 63 |
+| Reply | acc-sw1 → core-sw | 10 | guest-kali → core-sw | 64 |
+| Same reply, routed | core-sw → acc-sw1 | 100 | core-sw → user-pc1 | 63 |
+
+### Security analysis: the management leak
+- **Cause:** Management0 was in VRF default, the same routing table as Vlan100 and Vlan10, with `ip routing` on. So the connected route 172.20.20.0/24 and containerlab's default route via 172.20.20.1 were in the table the VLANs use, and 172.20.20.4 counted as one of core-sw's own addresses for packets from the VLANs.
+- **Leak 1, guest VLAN → switch management (proven 26 Nov):** from guest-kali, `nmap 172.20.20.4` found 22 and 443 open (21 closed, 979 filtered). `ssh admin@172.20.20.4` with containerlab's default `admin/admin` gave the CLI, and `enable` asked for no password: full admin rights from the guest VLAN. core-sw recorded it: `Last login: Thu Nov 26 11:25:21 2026 from 10.19.64.34`. `ssh admin@10.19.64.33` (the guest gateway) worked too: a service listens on every own address of its VRF.
+- **Leak 2, user traffic out Management0 (explained, not captured):** traffic from the VLANs to unknown destinations matched the default route via 172.20.20.1 and left through Management0 to the laptop. The laptop forwarded it out the Wi-Fi untranslated (Docker's MASQUERADE only matches `-s 172.20.20.0/24`), so lab addresses reached the home network and no reply came back.
+- **Path B, a host using its own management interface (checked, closed):** the hosts have no `eth0` (`network-mode: none`); `ip route get 172.20.20.4` gives `via` the gateway on all three.
+- **The fix (core-sw), in an order that never cuts the laptop off:**
+  1. `vrf instance MGMT`; SSH and eAPI enabled in VRF MGMT.
+  2. `interface Management0` → `vrf MGMT`. EOS removed its IPv4 and IPv6 addresses, so `ip address 172.20.20.4/24` again (IPv6 left off).
+  3. `ip route vrf MGMT 0.0.0.0/0 172.20.20.1`; the old default route and the stale `ipv6 route ::/0 3fff:172:20:20::1` removed.
+  4. `management ssh` → `vrf default` → `shutdown`.
+- **Second finding (26 Nov afternoon):** a scan of both SVIs from guest-kali still found NETCONF (TCP 830) and gNMI (TCP 6030) open: containerlab's default cEOS config enables them in VRF default. NETCONF reset the connection (it runs over SSH, already shut in VRF default); gNMI was probably usable (no gNMI client on the hosts to prove it). Fixed by moving both into VRF MGMT (`transport … default` → `vrf MGMT`).
+- Still open: GUEST ↔ USERS traffic is routed. The guest ACL comes in Phase 2.
+
+Retest after the fix (26 Nov, all passed):
+
+| Test | Must give | Result |
+|---|---|---|
+| guest-kali → ping 172.20.20.4 | `Network unreachable` | Passed |
+| guest-kali → `ssh admin@10.19.64.33` | `Connection refused` | Passed |
+| guest-kali → `nmap` ports 22, 443, 830, 6030 on 10.19.64.33 and 10.18.0.1 | Nothing open | Passed: closed or filtered |
+| user-pc2 → ping 8.8.8.8 | Fails: no default route in VRF default | Passed |
+| user-pc1 → ping guest-kali | Still works, `ttl=63` | Passed |
+| Laptop → `ssh admin@172.20.20.4`, ports 443, 830, 6030 | Work | Passed |
+| core-sw `show ip route` | Only the two VLAN routes | Passed |
+| core-sw `show ip route vrf MGMT` | C 172.20.20.0/24, S 0.0.0.0/0 via 172.20.20.1 | Passed |
+
+### Observations
+- Both SVIs use core-sw's system MAC (00:1c:73:7b:25:db). No conflict: a MAC only has to be unique inside one VLAN, and MAC tables are kept per VLAN.
+- user-pc1 and guest-kali are both on acc-sw1, yet the routed ping crosses the acc-sw1–core-sw trunk twice: up to the gateway in one VLAN, back down in the other.
+- Routing took about 0.6 ms (request at 0.000000 s, routed copy at 0.000590 s).
+- Wireshark marks each first copy of a request "no response found": the capture sees every packet twice; nothing was lost.
+- Three different errors: `Network unreachable` = core-sw has no route to the address; `Connection refused` = the device was reached, but nothing listens on that port; connection reset on port 830 = the port accepted the connection, but no SSH server was behind it.
+- `show management ssh` never listed VRF MGMT, even with SSH working there. A login from the laptop is the real proof.
+- core-sw's own Internet is now in VRF MGMT: `ping 8.8.8.8` fails, `ping vrf MGMT 8.8.8.8` works.
+
+### Problems and fixes
+- 25 Nov: `deploy` failed with "network namespace is not available (status=Stopped)". acc-sw1, from an earlier deploy, had crashed (`systemd-journald` watchdog timeout; cause not confirmed). Fix: `destroy` + `deploy` without `--cleanup`; the saved configs were kept.
+- EOS removed Management0's addresses when it moved to VRF MGMT. Fix: set the IPv4 address again right after `vrf MGMT`.
+- Two commits with the same message (`c1b2a13`, `2661222`): the second only removed the export's first lines. Clean the export before `git add`.
+- The first fix only covered SSH and eAPI. gNMI and NETCONF were found open by a scan later the same day (security analysis).
+
+### Lessons
+- One shared VRF caused both leaks: with management and users in one routing table, each side can reach the other.
+- "Is it mine?" comes before the routing table, per VRF: a router answers for every own address of the VRF the packet arrived in. Moving Management0 isn't enough; turn the services off in VRF default too.
+- Isolation is enforced by the network, not by the host: the fix is in core-sw's VRFs, not in a host route or a host firewall.
+- After a management fix, scan every management port (22, 80, 443, 830, 6030, 8080) on every own address, from a host in each VLAN.
+- Routing looks at the destination, NAT at the source: Leak 2's packets were forwarded, but never translated.
+- Change the management path in a safe order: services in the new VRF first, then move the interface.
+- A router lowers the TTL when it forwards a packet, not when the packet is for itself: 64 = core-sw answered, 63 = forwarded once.
